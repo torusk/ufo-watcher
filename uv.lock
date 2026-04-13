@@ -132,6 +132,3 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12" },
     { name = "pyobjc-framework-cocoa", specifier = ">=10.0" },
 ]
-
-[package.metadata.requires-dev]
-dev = []
