@@ -39,8 +39,9 @@ def main():
     watcher.start()
     print(f"[ufo-watcher] monitoring {cfg['url']} every {cfg['interval_sec']}s")
 
+    fly_duration = float(cfg.get("fly_duration_sec", 5))
     try:
-        run_app(alert_event)
+        run_app(alert_event, fly_duration=fly_duration)
     finally:
         watcher.stop()
 

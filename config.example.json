@@ -1,4 +1,5 @@
 {
   "url": "https://example.com/news",
-  "interval_sec": 60
+  "interval_sec": 60,
+  "fly_duration_sec": 5
 }

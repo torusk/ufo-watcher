@@ -27,6 +27,7 @@ _WOBBLE_AMP = 3.0       # idle hover amplitude (px)
 _WOBBLE_FREQ = 0.6      # idle hover frequency (Hz)
 _FLY_SPEED = 2.2        # flying speed multiplier
 _TIMER_INTERVAL = 1 / 60
+_IDLE_MARGIN = 20       # px gap from screen edges when idle
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +60,7 @@ class UFOView(AppKit.NSView):
 class UFOWindowController(AppKit.NSObject):
     """Manages the transparent UFO window and its animation state."""
 
-    def initWithAlertEvent_(self, alert_event: threading.Event):
+    def initWithAlertEvent_flyDuration_(self, alert_event: threading.Event, fly_duration: float):
         self = objc.super(UFOWindowController, self).init()
         if self is None:
             return None
@@ -69,13 +70,15 @@ class UFOWindowController(AppKit.NSObject):
         self._sw = sf.size.width
         self._sh = sf.size.height
         self._alert_event = alert_event
+        self._fly_duration = fly_duration   # seconds to fly before auto-stopping
         self._tick = 0.0
         self._flying = False
         self._fly_t = 0.0
+        self._fly_elapsed = 0.0             # seconds spent flying this round
 
-        # Build borderless transparent window
-        initial_x = (self._sw - _UFO_SIZE) / 2
-        initial_y = self._sh * 0.85
+        # Build borderless transparent window — start at idle (bottom-right)
+        initial_x = self._sw - _UFO_SIZE - _IDLE_MARGIN
+        initial_y = _IDLE_MARGIN
         frame = NSMakeRect(initial_x, initial_y, _UFO_SIZE, _UFO_SIZE)
 
         self._window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -118,7 +121,7 @@ class UFOWindowController(AppKit.NSObject):
     # ------------------------------------------------------------------
     def handleClick(self):
         if self._flying:
-            self._alert_event.clear()
+            self._stop_flying()
 
     # ------------------------------------------------------------------
     # Timer callback (60 fps)
@@ -130,20 +133,30 @@ class UFOWindowController(AppKit.NSObject):
             if not self._flying:
                 self._flying = True
                 self._fly_t = 0.0
+                self._fly_elapsed = 0.0
                 self._window.setIgnoresMouseEvents_(False)
+            else:
+                self._fly_elapsed += _TIMER_INTERVAL
+                if self._fly_elapsed >= self._fly_duration:
+                    self._stop_flying()
         else:
             if self._flying:
-                self._flying = False
-                self._window.setIgnoresMouseEvents_(True)
+                self._stop_flying()
 
         if self._flying:
             self._update_flying()
         else:
             self._update_idle()
 
+    def _stop_flying(self):
+        self._flying = False
+        self._alert_event.clear()
+        self._window.setIgnoresMouseEvents_(True)
+
     def _update_idle(self):
-        base_x = (self._sw - _UFO_SIZE) / 2
-        base_y = self._sh * 0.85
+        # Bottom-right corner with margin
+        base_x = self._sw - _UFO_SIZE - _IDLE_MARGIN
+        base_y = _IDLE_MARGIN
         dy = _WOBBLE_AMP * math.sin(2 * math.pi * _WOBBLE_FREQ * self._tick)
         self._window.setFrameOrigin_(AppKit.NSPoint(base_x, base_y + dy))
 
@@ -164,12 +177,12 @@ class UFOWindowController(AppKit.NSObject):
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def run_app(alert_event: threading.Event):
+def run_app(alert_event: threading.Event, fly_duration: float = 5.0):
     """Initialise NSApplication, create UFO window, and run the Cocoa event loop."""
     app = NSApplication.sharedApplication()
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
-    controller = UFOWindowController.alloc().initWithAlertEvent_(alert_event)
+    controller = UFOWindowController.alloc().initWithAlertEvent_flyDuration_(alert_event, fly_duration)
 
     NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
         _TIMER_INTERVAL,
