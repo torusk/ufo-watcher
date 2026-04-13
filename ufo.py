@@ -27,14 +27,13 @@ _WOBBLE_AMP = 3.0       # idle hover amplitude (px)
 _WOBBLE_FREQ = 0.6      # idle hover frequency (Hz)
 _FLY_SPEED = 2.2        # flying speed multiplier
 _TIMER_INTERVAL = 1 / 60
-_IDLE_MARGIN = 20       # px gap from screen edges when idle
+_DRAG_THRESHOLD = 4     # px — movement larger than this is treated as a drag, not a click
 
 
 # ---------------------------------------------------------------------------
-# Custom NSView — intercepts mouseDown_ to dismiss the UFO
+# Custom NSView — handles click (dismiss) and drag (reposition)
 # ---------------------------------------------------------------------------
 class UFOView(AppKit.NSView):
-    """Transparent content view that forwards clicks to the controller."""
 
     def initWithController_(self, controller):
         frame = NSMakeRect(0, 0, _UFO_SIZE, _UFO_SIZE)
@@ -42,10 +41,40 @@ class UFOView(AppKit.NSView):
         if self is None:
             return None
         self._controller = controller
+        self._drag_start_mouse = None   # NSPoint in screen coords at mouseDown
+        self._drag_start_origin = None  # window origin at mouseDown
+        self._did_drag = False
         return self
 
     def mouseDown_(self, event):
-        self._controller.handleClick()
+        # Record starting positions for potential drag
+        loc = event.locationInWindow()
+        win_origin = self._controller._window.frame().origin
+        # Convert to screen coords
+        self._drag_start_mouse = self._controller._window.convertPointToScreen_(loc)
+        self._drag_start_origin = win_origin
+        self._did_drag = False
+
+    def mouseDragged_(self, event):
+        if self._drag_start_mouse is None:
+            return
+        loc = event.locationInWindow()
+        current = self._controller._window.convertPointToScreen_(loc)
+        dx = current.x - self._drag_start_mouse.x
+        dy = current.y - self._drag_start_mouse.y
+        if abs(dx) > _DRAG_THRESHOLD or abs(dy) > _DRAG_THRESHOLD:
+            self._did_drag = True
+        new_x = self._drag_start_origin.x + dx
+        new_y = self._drag_start_origin.y + dy
+        self._controller._window.setFrameOrigin_(AppKit.NSPoint(new_x, new_y))
+        # Update idle home to the dragged position
+        self._controller.setIdleHome_y_(new_x, new_y)
+
+    def mouseUp_(self, event):
+        if not self._did_drag:
+            self._controller.handleClick()
+        self._drag_start_mouse = None
+        self._drag_start_origin = None
 
     def acceptsFirstResponder(self):
         return True
@@ -58,7 +87,6 @@ class UFOView(AppKit.NSView):
 # Window controller — owns animation state
 # ---------------------------------------------------------------------------
 class UFOWindowController(AppKit.NSObject):
-    """Manages the transparent UFO window and its animation state."""
 
     def initWithAlertEvent_flyDuration_(self, alert_event: threading.Event, fly_duration: float):
         self = objc.super(UFOWindowController, self).init()
@@ -66,21 +94,22 @@ class UFOWindowController(AppKit.NSObject):
             return None
 
         screen = AppKit.NSScreen.mainScreen()
-        sf = screen.frame()
-        self._sw = sf.size.width
-        self._sh = sf.size.height
+        # visibleFrame excludes Dock and menu bar
+        vf = screen.visibleFrame()
+        self._sw = screen.frame().size.width
+        self._sh = screen.frame().size.height
         self._alert_event = alert_event
-        self._fly_duration = fly_duration   # seconds to fly before auto-stopping
+        self._fly_duration = fly_duration
         self._tick = 0.0
         self._flying = False
         self._fly_t = 0.0
-        self._fly_elapsed = 0.0             # seconds spent flying this round
+        self._fly_elapsed = 0.0
 
-        # Build borderless transparent window — start at idle (bottom-right)
-        initial_x = self._sw - _UFO_SIZE - _IDLE_MARGIN
-        initial_y = _IDLE_MARGIN
-        frame = NSMakeRect(initial_x, initial_y, _UFO_SIZE, _UFO_SIZE)
+        # Idle home: bottom-right of visible area (above Dock)
+        self._idle_x = vf.origin.x + vf.size.width - _UFO_SIZE - 20
+        self._idle_y = vf.origin.y + 20
 
+        frame = NSMakeRect(self._idle_x, self._idle_y, _UFO_SIZE, _UFO_SIZE)
         self._window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             frame,
             NSWindowStyleMaskBorderless,
@@ -95,13 +124,12 @@ class UFOWindowController(AppKit.NSObject):
             NSWindowCollectionBehaviorCanJoinAllSpaces
             | NSWindowCollectionBehaviorStationary
         )
-        self._window.setIgnoresMouseEvents_(True)
+        # Always accept mouse events so drag works in idle too
+        self._window.setIgnoresMouseEvents_(False)
 
-        # Custom content view
         content_view = UFOView.alloc().initWithController_(self)
         self._window.setContentView_(content_view)
 
-        # UFO image inside content view
         image_path = os.path.join(os.path.dirname(__file__), "assets", "UFO.png")
         image = AppKit.NSImage.alloc().initWithContentsOfFile_(image_path)
         if image is None:
@@ -116,9 +144,11 @@ class UFOWindowController(AppKit.NSObject):
         self._window.makeKeyAndOrderFront_(None)
         return self
 
-    # ------------------------------------------------------------------
-    # Click handler called by UFOView
-    # ------------------------------------------------------------------
+    def setIdleHome_y_(self, x: float, y: float):
+        """Called by UFOView during drag to update the idle home position."""
+        self._idle_x = x
+        self._idle_y = y
+
     def handleClick(self):
         if self._flying:
             self._stop_flying()
@@ -134,7 +164,6 @@ class UFOWindowController(AppKit.NSObject):
                 self._flying = True
                 self._fly_t = 0.0
                 self._fly_elapsed = 0.0
-                self._window.setIgnoresMouseEvents_(False)
             else:
                 self._fly_elapsed += _TIMER_INTERVAL
                 if self._fly_elapsed >= self._fly_duration:
@@ -151,14 +180,10 @@ class UFOWindowController(AppKit.NSObject):
     def _stop_flying(self):
         self._flying = False
         self._alert_event.clear()
-        self._window.setIgnoresMouseEvents_(True)
 
     def _update_idle(self):
-        # Bottom-right corner with margin
-        base_x = self._sw - _UFO_SIZE - _IDLE_MARGIN
-        base_y = _IDLE_MARGIN
         dy = _WOBBLE_AMP * math.sin(2 * math.pi * _WOBBLE_FREQ * self._tick)
-        self._window.setFrameOrigin_(AppKit.NSPoint(base_x, base_y + dy))
+        self._window.setFrameOrigin_(AppKit.NSPoint(self._idle_x, self._idle_y + dy))
 
     def _update_flying(self):
         self._fly_t += _TIMER_INTERVAL * _FLY_SPEED
