@@ -1,14 +1,15 @@
 # UFO Watcher
 
-指定したURLに変化があったら、デスクトップのUFOが飛び始めるmacOSアプリ。
+指定したURLのコンテンツが変化したら、デスクトップのUFOが飛び始めるmacOS常駐アプリ。
 
-- **平常時**: 画面右下でふわふわホバリング
-- **変化検出時**: 画面内をリサージュ曲線で飛び回る（5秒で自動停止）
-- **ダブルクリック**: 監視中のURLをブラウザで開く
-- **右クリック**: URLを変更 / 終了
-- **ドラッグ**: 好きな位置に移動
+- **平常時**: 画面右下でサイン波でふわふわホバリング
+- **変化検出時**: 画面内をリサージュ曲線（3:2）で飛び回る（`fly_duration_sec` 秒で自動停止）
+- **シングルクリック**: フライトを止めてアイドルに戻す
+- **ダブルクリック**: 監視中のURLをデフォルトブラウザで開く
+- **右クリック**: URLをその場で変更 / 終了
+- **ドラッグ**: UFOを好きな位置に移動（次回起動まで保持）
 
-> macOS専用 / Python 3.9+ / 外部依存は `pyobjc` のみ
+> macOS専用 / Python 3.9+ / 外部依存は `pyobjc-framework-Cocoa` と `beautifulsoup4` のみ
 
 ---
 
@@ -35,12 +36,13 @@ cp config.example.json config.json
 }
 ```
 
-### オプション設定
+### 全オプション
 
 ```json
 {
   "url": "https://example.com/news",
   "interval_sec": 60,
+  "fly_duration_sec": 5,
   "selector": "#main-content",
   "ignore_patterns": ["timestamp", "ad-banner"],
   "schedule": {
@@ -52,21 +54,44 @@ cp config.example.json config.json
 }
 ```
 
-| キー | 必須 | 説明 |
-|---|:---:|---|
-| `url` | ✓ | 監視対象のURL |
-| `interval_sec` | ✓ | ポーリング間隔（秒） |
-| `selector` | | CSS セレクタで監視範囲を限定 |
-| `ignore_patterns` | | 比較から除外するパターン（文字列配列） |
-| `schedule.enabled` | | `true` で時間帯制限を有効化 |
-| `schedule.weekdays_only` | | 平日のみ監視 |
-| `schedule.start` / `end` | | 監視時間帯 (`"HH:MM"` 形式) |
+| キー | 必須 | デフォルト | 説明 |
+|---|:---:|:---:|---|
+| `url` | ✓ | — | 監視対象のURL |
+| `interval_sec` | ✓ | — | ポーリング間隔（秒） |
+| `fly_duration_sec` | | `5` | 変化検出後のフライト継続時間（秒） |
+| `selector` | | — | CSS セレクタで監視範囲を限定（BeautifulSoup使用） |
+| `ignore_patterns` | | `[]` | 比較から除外する文字列パターン（タイムスタンプ等のノイズ対策） |
+| `schedule.enabled` | | `false` | `true` で時間帯・曜日制限を有効化 |
+| `schedule.weekdays_only` | | `false` | `true` で平日のみ監視（土日スキップ） |
+| `schedule.start` / `end` | | `"00:00"` / `"23:59"` | 監視時間帯（`"HH:MM"` 形式） |
 
 ## 起動
 
 ```bash
 uv run python main.py
 ```
+
+## 動作の仕組み
+
+```
+メインスレッド (NSTimer @ 60fps)          Watcherスレッド
+─────────────────────────────             ─────────────────────
+alert_event.is_set() を確認    ←── YES ── ハッシュ変化 → event.set()
+  → フライトアニメーション開始              │
+クリック検出                               sleep(interval_sec)
+  → event.clear() → アイドルへ             └─ ループ
+```
+
+- **`main.py`**: `config.json` を読み込み、Watcherスレッドを起動してCocoaアプリを実行
+- **`watcher.py`**: URLをポーリングしてSHA-256ハッシュを比較する監視スレッド
+  - 初回フェッチはベースライン記録のみ（アラートは発火しない）
+  - `selector` でCSS選択、`ignore_patterns` でノイズ行を除外してからハッシュ化
+  - `schedule` 設定に従って監視時間帯・曜日を制限
+- **`ufo.py`**: macOSウィンドウとアニメーションの実装（pyobjc使用）
+  - `NSWindowStyleMaskBorderless` + `clearColor` で完全透明のフロートウィンドウ
+  - `NSFloatingWindowLevel+1` で常に最前面、全Spacesに表示
+  - アイドル: サイン波ホバー（±3px）。変化検出時: (3,2)リサージュ曲線で飛び回る
+  - 右クリックメニューからURLをその場で変更可能（`config.json` に自動書き戻し）
 
 ## 使用例
 
@@ -85,7 +110,7 @@ uv run python main.py
 }
 ```
 
-**自分のブログの更新通知**
+**ブログの更新をセレクタ指定で監視する**
 
 ```json
 {
@@ -100,4 +125,4 @@ uv run python main.py
 
 - macOS 12 Monterey 以降
 - Python 3.9+
-- [uv](https://docs.astral.sh/uv/) (pip でも可: `pip install pyobjc-framework-Cocoa beautifulsoup4`)
+- [uv](https://docs.astral.sh/uv/)（pip でも可: `pip install pyobjc-framework-Cocoa beautifulsoup4`）
