@@ -3,10 +3,13 @@
 import math
 import os
 import threading
+import webbrowser
 
 import AppKit
 import objc
 from Cocoa import (
+    NSAlert,
+    NSAlertFirstButtonReturn,
     NSApplication,
     NSApplicationActivationPolicyAccessory,
     NSBackingStoreBuffered,
@@ -14,6 +17,9 @@ from Cocoa import (
     NSImageScaleProportionallyUpOrDown,
     NSImageView,
     NSMakeRect,
+    NSMenu,
+    NSMenuItem,
+    NSTextField,
     NSTimer,
     NSWindow,
     NSWindowCollectionBehaviorCanJoinAllSpaces,
@@ -22,16 +28,16 @@ from Cocoa import (
 )
 
 
-_UFO_SIZE = 96          # px
-_WOBBLE_AMP = 3.0       # idle hover amplitude (px)
-_WOBBLE_FREQ = 0.6      # idle hover frequency (Hz)
-_FLY_SPEED = 2.2        # flying speed multiplier
+_UFO_SIZE = 96
+_WOBBLE_AMP = 3.0
+_WOBBLE_FREQ = 0.6
+_FLY_SPEED = 2.2
 _TIMER_INTERVAL = 1 / 60
-_DRAG_THRESHOLD = 4     # px — movement larger than this is treated as a drag, not a click
+_DRAG_THRESHOLD = 4     # px — movement larger than this is a drag, not a click
 
 
 # ---------------------------------------------------------------------------
-# Custom NSView — handles click (dismiss) and drag (reposition)
+# Custom NSView — click / double-click / drag / right-click
 # ---------------------------------------------------------------------------
 class UFOView(AppKit.NSView):
 
@@ -41,22 +47,26 @@ class UFOView(AppKit.NSView):
         if self is None:
             return None
         self._controller = controller
-        self._drag_start_mouse = None   # NSPoint in screen coords at mouseDown
-        self._drag_start_origin = None  # window origin at mouseDown
+        self._drag_start_mouse = None
+        self._drag_start_origin = None
         self._did_drag = False
+        self._is_double_click = False
         return self
 
     def mouseDown_(self, event):
-        # Record starting positions for potential drag
+        if event.clickCount() == 2:
+            self._is_double_click = True
+            self._controller.handleDoubleClick()
+            return
+        self._is_double_click = False
         loc = event.locationInWindow()
         win_origin = self._controller._window.frame().origin
-        # Convert to screen coords
         self._drag_start_mouse = self._controller._window.convertPointToScreen_(loc)
         self._drag_start_origin = win_origin
         self._did_drag = False
 
     def mouseDragged_(self, event):
-        if self._drag_start_mouse is None:
+        if self._drag_start_mouse is None or self._is_double_click:
             return
         loc = event.locationInWindow()
         current = self._controller._window.convertPointToScreen_(loc)
@@ -67,14 +77,45 @@ class UFOView(AppKit.NSView):
         new_x = self._drag_start_origin.x + dx
         new_y = self._drag_start_origin.y + dy
         self._controller._window.setFrameOrigin_(AppKit.NSPoint(new_x, new_y))
-        # Update idle home to the dragged position
         self._controller.setIdleHome_y_(new_x, new_y)
 
     def mouseUp_(self, event):
+        if self._is_double_click:
+            return
         if not self._did_drag:
             self._controller.handleClick()
         self._drag_start_mouse = None
         self._drag_start_origin = None
+
+    def rightMouseDown_(self, event):
+        menu = NSMenu.alloc().initWithTitle_("")
+
+        # Current URL (display only)
+        url = self._controller._current_url
+        display = url if len(url) <= 50 else url[:47] + "…"
+        label = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(display, None, "")
+        label.setEnabled_(False)
+        menu.addItem_(label)
+
+        menu.addItem_(NSMenuItem.separatorItem())
+
+        # Change URL
+        change = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "URLを変更…", "changeURL:", ""
+        )
+        change.setTarget_(self._controller)
+        menu.addItem_(change)
+
+        menu.addItem_(NSMenuItem.separatorItem())
+
+        # Quit
+        quit_item = NSMenuItem.alloc().initWithTitle_action_keyEquivalent_(
+            "終了", "quitApp:", ""
+        )
+        quit_item.setTarget_(self._controller)
+        menu.addItem_(quit_item)
+
+        NSMenu.popUpContextMenu_withEvent_forView_(menu, event, self)
 
     def acceptsFirstResponder(self):
         return True
@@ -84,28 +125,34 @@ class UFOView(AppKit.NSView):
 
 
 # ---------------------------------------------------------------------------
-# Window controller — owns animation state
+# Window controller — animation state + URL change logic
 # ---------------------------------------------------------------------------
 class UFOWindowController(AppKit.NSObject):
 
-    def initWithAlertEvent_flyDuration_(self, alert_event: threading.Event, fly_duration: float):
+    def initWithAlertEvent_flyDuration_currentUrl_onUrlChange_(
+        self,
+        alert_event: threading.Event,
+        fly_duration: float,
+        current_url: str,
+        on_url_change,
+    ):
         self = objc.super(UFOWindowController, self).init()
         if self is None:
             return None
 
         screen = AppKit.NSScreen.mainScreen()
-        # visibleFrame excludes Dock and menu bar
         vf = screen.visibleFrame()
         self._sw = screen.frame().size.width
         self._sh = screen.frame().size.height
         self._alert_event = alert_event
         self._fly_duration = fly_duration
+        self._current_url = current_url
+        self._on_url_change = on_url_change
         self._tick = 0.0
         self._flying = False
         self._fly_t = 0.0
         self._fly_elapsed = 0.0
 
-        # Idle home: bottom-right of visible area (above Dock)
         self._idle_x = vf.origin.x + vf.size.width - _UFO_SIZE - 20
         self._idle_y = vf.origin.y + 20
 
@@ -124,7 +171,6 @@ class UFOWindowController(AppKit.NSObject):
             NSWindowCollectionBehaviorCanJoinAllSpaces
             | NSWindowCollectionBehaviorStationary
         )
-        # Always accept mouse events so drag works in idle too
         self._window.setIgnoresMouseEvents_(False)
 
         content_view = UFOView.alloc().initWithController_(self)
@@ -134,9 +180,7 @@ class UFOWindowController(AppKit.NSObject):
         image = AppKit.NSImage.alloc().initWithContentsOfFile_(image_path)
         if image is None:
             raise FileNotFoundError(f"UFO image not found: {image_path}")
-        image_view = NSImageView.alloc().initWithFrame_(
-            NSMakeRect(0, 0, _UFO_SIZE, _UFO_SIZE)
-        )
+        image_view = NSImageView.alloc().initWithFrame_(NSMakeRect(0, 0, _UFO_SIZE, _UFO_SIZE))
         image_view.setImage_(image)
         image_view.setImageScaling_(NSImageScaleProportionallyUpOrDown)
         content_view.addSubview_(image_view)
@@ -144,14 +188,41 @@ class UFOWindowController(AppKit.NSObject):
         self._window.makeKeyAndOrderFront_(None)
         return self
 
-    def setIdleHome_y_(self, x: float, y: float):
-        """Called by UFOView during drag to update the idle home position."""
+    def setIdleHome_y_(self, x, y):
         self._idle_x = x
         self._idle_y = y
 
+    # ------------------------------------------------------------------
+    # Interaction handlers
+    # ------------------------------------------------------------------
     def handleClick(self):
         if self._flying:
             self._stop_flying()
+
+    def handleDoubleClick(self):
+        webbrowser.open(self._current_url)
+
+    def changeURL_(self, sender):
+        alert = NSAlert.alloc().init()
+        alert.setMessageText_("監視URLを変更")
+        alert.setInformativeText_("新しいURLを入力してください。次のポーリングから反映されます。")
+        alert.addButtonWithTitle_("変更")
+        alert.addButtonWithTitle_("キャンセル")
+
+        field = NSTextField.alloc().initWithFrame_(NSMakeRect(0, 0, 360, 24))
+        field.setStringValue_(self._current_url)
+        alert.setAccessoryView_(field)
+        alert.window().setInitialFirstResponder_(field)
+        field.selectText_(None)
+
+        if alert.runModal() == NSAlertFirstButtonReturn:
+            new_url = field.stringValue().strip()
+            if new_url and new_url != self._current_url:
+                self._current_url = new_url
+                self._on_url_change(new_url)
+
+    def quitApp_(self, sender):
+        NSApplication.sharedApplication().terminate_(None)
 
     # ------------------------------------------------------------------
     # Timer callback (60 fps)
@@ -193,7 +264,6 @@ class UFOWindowController(AppKit.NSObject):
         cy = (self._sh - _UFO_SIZE) / 2
         rx = cx - margin
         ry = cy - margin
-        # Lissajous a=3, b=2, δ=π/2
         x = cx + rx * math.sin(3 * t + math.pi / 2)
         y = cy + ry * math.sin(2 * t)
         self._window.setFrameOrigin_(AppKit.NSPoint(x, y))
@@ -202,19 +272,21 @@ class UFOWindowController(AppKit.NSObject):
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def run_app(alert_event: threading.Event, fly_duration: float = 5.0):
-    """Initialise NSApplication, create UFO window, and run the Cocoa event loop."""
+def run_app(
+    alert_event: threading.Event,
+    fly_duration: float = 5.0,
+    current_url: str = "",
+    on_url_change=None,
+):
     app = NSApplication.sharedApplication()
     app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
-    controller = UFOWindowController.alloc().initWithAlertEvent_flyDuration_(alert_event, fly_duration)
+    controller = UFOWindowController.alloc().initWithAlertEvent_flyDuration_currentUrl_onUrlChange_(
+        alert_event, fly_duration, current_url, on_url_change or (lambda u: None)
+    )
 
     NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-        _TIMER_INTERVAL,
-        controller,
-        "tick:",
-        None,
-        True,
+        _TIMER_INTERVAL, controller, "tick:", None, True
     )
 
     app.run()
