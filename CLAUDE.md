@@ -12,6 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 uv sync
 
+# Copy and edit config
+cp config.example.json config.json
+
 # Run
 uv run python main.py
 ```
@@ -53,8 +56,10 @@ check click                           sleep(interval_sec)
 - **`main.py`** — Entry point: loads `config.json`, starts watcher thread, runs Cocoa app loop
 - **`ufo.py`** — macOS window + animation via `pyobjc-framework-Cocoa`
   - `NSWindow` with `NSWindowStyleMaskBorderless`, fully transparent (`clearColor`)
-  - Always-on-top (`setLevel_(25)`), spans all Spaces
-  - Idle: sin-wave hover (±2–3px). Alert: Lissajous-curve flight across screen
+  - Always-on-top (`NSFloatingWindowLevel+1`), spans all Spaces
+  - `UFOView(NSView)` subclass as content view — implements `mouseDown_` to dismiss
+  - `UFOWindowController(NSObject)` — owns animation state, called by `NSTimer` at 60fps
+  - Idle: sin-wave hover (±3px). Alert: Lissajous-curve flight across screen
   - Mouse passthrough when idle (`setIgnoresMouseEvents_(True)`); click-to-dismiss when flying
 - **`watcher.py`** — URL polling loop: `urllib.request` GET → `hashlib.sha256` of body → `threading.Event`
   - First run records baseline hash without triggering alert
