@@ -72,6 +72,10 @@ check click                           sleep(interval_sec)
 - Standard library only for networking: `urllib.request`, `hashlib`, `threading`, `json`
 - **macOS only** (pyobjc dependency)
 
+## Workflow Rules
+
+- **作業が完了したら必ず GitHub にプッシュする。** コミットしただけで終わらず、`git push` まで行うこと。
+
 ## Development Order (from spec)
 
 1. UFO display: idle hover + Lissajous flight + click detection

@@ -178,10 +178,13 @@ class UFOWindowController(AppKit.NSObject):
         self._flying = False                   # フライト中かどうかのフラグ
         self._fly_t = 0.0                      # Lissajousパラメータt（飛行位置計算に使用）
         self._fly_elapsed = 0.0               # フライト開始からの経過時間（秒）
+        self._alerted_idle = False            # 更新検知後・未確認のまま自動停止した状態（左下待機）
 
-        # アイドル位置: visibleFrame の右下隅、Dockから20px上
+        # 通常アイドル位置: visibleFrame の右下隅、Dockから20px上
         self._idle_x = vf.origin.x + vf.size.width - _UFO_SIZE - 20
         self._idle_y = vf.origin.y + 20
+        # 未確認アラート待機位置: 左下隅（右下と対称）
+        self._alert_idle_x = vf.origin.x + 20
 
         # ── ウィンドウを生成 ──────────────────────────────────────────────
         frame = NSMakeRect(self._idle_x, self._idle_y, _UFO_SIZE, _UFO_SIZE)
@@ -228,9 +231,12 @@ class UFOWindowController(AppKit.NSObject):
     # マウス操作ハンドラ（UFOView から呼ばれる）
     # ------------------------------------------------------------------
     def handleClick(self):
-        """シングルクリック: フライト中なら停止してアイドルに戻る。"""
+        """シングルクリック: 飛行中 or 左下待機中なら「気づいた」として右下の通常位置に戻る。"""
         if self._flying:
             self._stop_flying()
+        elif self._alerted_idle:
+            # 左下待機中にクリック → 確認済みとして通常状態（右下）に戻る
+            self._alerted_idle = False
 
     def handleDoubleClick(self):
         """ダブルクリック: 監視中のURLをデフォルトブラウザで開く。"""
@@ -281,15 +287,16 @@ class UFOWindowController(AppKit.NSObject):
 
         if self._alert_event.is_set():
             if not self._flying:
-                # アラート検出 → フライト開始
+                # アラート検出 → フライト開始（未確認フラグをリセット）
                 self._flying = True
                 self._fly_t = 0.0
                 self._fly_elapsed = 0.0
+                self._alerted_idle = False
             else:
-                # 飛行継続中: 経過時間を加算して上限に達したら自動停止
+                # 飛行継続中: 経過時間を加算して上限に達したら左下で待機
                 self._fly_elapsed += _TIMER_INTERVAL
                 if self._fly_elapsed >= self._fly_duration:
-                    self._stop_flying()
+                    self._stop_flying_to_alert_idle()
         else:
             # アラートがクリアされた（クリック dismiss 等）なら停止
             if self._flying:
@@ -302,14 +309,28 @@ class UFOWindowController(AppKit.NSObject):
             self._update_idle()
 
     def _stop_flying(self):
-        """フライトを停止し、alert_event もクリアしてアイドル状態に戻す。"""
+        """フライトを停止し、alert_event もクリアして通常アイドル（右下）に戻す。
+        飛行中にクリックして「その場で確認した」場合に呼ばれる。
+        """
         self._flying = False
+        self._alerted_idle = False
+        self._alert_event.clear()
+
+    def _stop_flying_to_alert_idle(self):
+        """フライトをタイムアウトで停止し、左下の未確認待機状態に移行する。
+        席を外していて気づかなかった場合、左下で待機することで変化があったことを示す。
+        """
+        self._flying = False
+        self._alerted_idle = True
         self._alert_event.clear()
 
     def _update_idle(self):
-        """アイドル時のホバーアニメーション: サイン波で上下に揺れる。"""
+        """アイドル時のホバーアニメーション: サイン波で上下に揺れる。
+        通常は右下、未確認アラート待機中は左下に表示する。
+        """
         dy = _WOBBLE_AMP * math.sin(2 * math.pi * _WOBBLE_FREQ * self._tick)
-        self._window.setFrameOrigin_(AppKit.NSPoint(self._idle_x, self._idle_y + dy))
+        x = self._alert_idle_x if self._alerted_idle else self._idle_x
+        self._window.setFrameOrigin_(AppKit.NSPoint(x, self._idle_y + dy))
 
     def _update_flying(self):
         """フライト時のリサージュ曲線アニメーション。
