@@ -26,6 +26,7 @@ from Cocoa import (
     NSWindowCollectionBehaviorStationary,         # Mission Controlで動かない
     NSWindowStyleMaskBorderless,
 )
+from Foundation import NSUserNotification, NSUserNotificationCenter
 
 
 # ── アニメーション定数 ──────────────────────────────────────────────────────
@@ -242,6 +243,21 @@ class UFOWindowController(AppKit.NSObject):
         """ダブルクリック: 監視中のURLをデフォルトブラウザで開く。"""
         webbrowser.open(self._current_url)
 
+    def _send_notification(self):
+        """macOS通知センターにページ更新を通知する。
+        席を外していてUFOが見えなくても、通知履歴から気づけるようにするため。
+        失敗しても動作に影響しないよう例外は握り潰す。
+        """
+        try:
+            notification = NSUserNotification.alloc().init()
+            notification.setTitle_("UFO Watcher")
+            url_display = self._current_url if len(self._current_url) <= 60 else self._current_url[:57] + "…"
+            notification.setInformativeText_(f"ページが更新されました\n{url_display}")
+            notification.setSoundName_("NSUserNotificationDefaultSoundName")
+            NSUserNotificationCenter.defaultUserNotificationCenter().deliverNotification_(notification)
+        except Exception:
+            pass
+
     def changeURL_(self, sender):
         """右クリックメニュー「URLを変更…」からURL変更ダイアログを表示する。
         OKが押されて新URLが入力されていれば on_url_change コールバックを呼ぶ。
@@ -292,6 +308,7 @@ class UFOWindowController(AppKit.NSObject):
                 self._fly_t = 0.0
                 self._fly_elapsed = 0.0
                 self._alerted_idle = False
+                self._send_notification()  # 通知センターにも通知
             else:
                 # 飛行継続中: 経過時間を加算して上限に達したら左下で待機
                 self._fly_elapsed += _TIMER_INTERVAL
