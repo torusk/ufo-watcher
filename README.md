@@ -73,6 +73,18 @@ cp config.example.json config.json
 uv run python main.py
 ```
 
+## ログイン時の自動起動
+
+```bash
+# 登録（次回ログインから自動起動）
+uv run python autostart.py install
+
+# 解除
+uv run python autostart.py uninstall
+```
+
+ログは同ディレクトリの `ufo.log` に出力されます。
+
 ## 動作の仕組み
 
 ```
