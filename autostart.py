@@ -52,6 +52,8 @@ def _write_plist(uv: str) -> None:
     <true/>
     <key>KeepAlive</key>
     <false/>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
     <key>StandardOutPath</key>
     <string>{_LOG_PATH}</string>
     <key>StandardErrorPath</key>
