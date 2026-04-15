@@ -73,6 +73,44 @@ cp config.example.json config.json
 uv run python main.py
 ```
 
+## ログ
+
+自動起動（install.sh でインストール後）の場合、ログは以下に記録されます：
+
+```
+~/Library/Logs/ufo_watcher.log
+```
+
+**リアルタイムで確認する（ターミナルに流し続ける）**
+
+```bash
+tail -f ~/Library/Logs/ufo_watcher.log
+```
+
+`Ctrl+C` で停止。
+
+**ログの内容例**
+
+```
+[ufo-watcher] monitoring https://example.com every 3s
+[watcher] baseline recorded: a3f2c1d8…   ← 起動時のベースライン記録（アラートは出ない）
+[watcher] change detected! a3f2c1d8… → 9b7e4f20…  ← 変化を検出 → UFO飛ぶ
+[watcher] error: <urlopen error ...>      ← ネットワークエラー（次回まで待機）
+[ufo-watcher] now monitoring https://new-url.com   ← 右クリックでURL変更後
+```
+
+**ログを消す**
+
+```bash
+# ファイルを空にする（削除せず容量だけゼロにする）
+> ~/Library/Logs/ufo_watcher.log
+
+# ファイルごと削除する
+rm ~/Library/Logs/ufo_watcher.log
+```
+
+> **Note**: ターミナルから起動した場合（`uv run python main.py`）はターミナルに直接出力されるため、ログファイルは作られません。
+
 ## 動作の仕組み
 
 ```
