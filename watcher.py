@@ -14,7 +14,11 @@ def _fetch_body(url: str) -> bytes:
     """
     req = urllib.request.Request(
         url,
-        headers={"User-Agent": "ufo-watcher/0.1 (github.com/torusk/ufo-watcher)"},
+        headers={
+            "User-Agent": "ufo-watcher/0.1 (github.com/torusk/ufo-watcher)",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
     )
     with urllib.request.urlopen(req, timeout=15) as resp:
         return resp.read()
